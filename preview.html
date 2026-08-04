@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Boat Day - world preview</title>
+<style>body{margin:0;background:#e8e0cd;font:12px monospace}canvas{display:block}</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script type="module">
+// 2D QA render of baked world data. Query params:
+//   ?cx=<world x>&cz=<world z>&s=<px per meter>   (defaults to full-map fit)
+const [meta, water, roads, buildings, green, pois, nav] = await Promise.all(
+  ['meta','water','roads','buildings','green','pois','navwater'].map(n => fetch(`/world/${n}.json`).then(r => r.json()))
+);
+const B = meta.bounds;
+const q = new URLSearchParams(location.search);
+const W = 1280, H = 1600;
+const fitScale = Math.min(W / (B.maxX - B.minX), H / (B.maxZ - B.minZ));
+const s = parseFloat(q.get('s') ?? fitScale);
+const cx = parseFloat(q.get('cx') ?? (B.minX + B.maxX) / 2);
+const cz = parseFloat(q.get('cz') ?? (B.minZ + B.maxZ) / 2);
+
+const canvas = document.getElementById('c');
+canvas.width = W; canvas.height = H;
+const ctx = canvas.getContext('2d');
+const X = (x) => (x - cx) * s + W / 2;
+const Z = (z) => (z - cz) * s + H / 2;
+
+// land
+ctx.fillStyle = '#ded5bc'; ctx.fillRect(0, 0, W, H);
+
+// sea from nav grid bitmask
+const bits = Uint8Array.from(atob(nav.bits), (ch) => ch.charCodeAt(0));
+ctx.fillStyle = '#7fb8d8';
+const cell = nav.cell * s;
+for (let r = 0; r < nav.h; r++) {
+  const zPix = Z(nav.minZ + r * nav.cell);
+  if (zPix < -cell || zPix > H + cell) continue;
+  for (let c = 0; c < nav.w; c++) {
+    if (!bits[r * nav.w + c]) continue;
+    const xPix = X(nav.minX + c * nav.cell);
+    if (xPix < -cell || xPix > W + cell) continue;
+    ctx.fillRect(xPix, zPix, cell + 0.5, cell + 0.5);
+  }
+}
+
+const poly = (pts) => { ctx.beginPath(); ctx.moveTo(X(pts[0]), Z(pts[1])); for (let i = 2; i < pts.length; i += 2) ctx.lineTo(X(pts[i]), Z(pts[i + 1])); ctx.closePath(); };
+
+ctx.fillStyle = '#b5cf8e';
+for (const g of green.green) { poly(g); ctx.fill(); }
+
+// inland water polys
+ctx.fillStyle = '#6aa9cc';
+for (const w of water.polys) { poly(w.outer); ctx.fill(); }
+
+// roads by class
+const roadStyle = { major: ['#f4b26a', 3.5], street: ['#ffffff', 2], service: ['#eeeeee', 1], path: ['#c9b8946', 0.5] };
+for (const cls of ['path', 'service', 'street', 'major']) {
+  const [color, wpx] = roadStyle[cls];
+  ctx.strokeStyle = color; ctx.lineWidth = Math.max(wpx * s * 4, cls === 'major' ? 2 : 1);
+  ctx.beginPath();
+  for (const rd of roads.roads) {
+    if (rd.cls !== cls) continue;
+    ctx.moveTo(X(rd.pts[0]), Z(rd.pts[1]));
+    for (let i = 2; i < rd.pts.length; i += 2) ctx.lineTo(X(rd.pts[i]), Z(rd.pts[i + 1]));
+  }
+  ctx.stroke();
+}
+
+// buildings
+ctx.fillStyle = 'rgba(160,140,120,0.75)';
+for (const b of buildings.buildings) { poly(b.pts); ctx.fill(); }
+
+// named places
+ctx.font = 'bold 13px monospace';
+for (const [name, p] of Object.entries(pois.places)) {
+  const x = X(p.waterX ?? p.x), z = Z(p.waterZ ?? p.z);
+  ctx.fillStyle = '#d0342c';
+  ctx.beginPath(); ctx.arc(x, z, 5, 0, 7); ctx.fill();
+  ctx.fillStyle = '#20303c';
+  ctx.fillText(name, x + 8, z + 4);
+}
+
+window.__previewDone = true;
+</script>
+</body>
+</html>
